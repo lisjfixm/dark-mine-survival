@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=yes">
+  <title>MiningSim</title>
+
+  <!-- poki include head -->
+
+  <!-- =====================================================================
+       Start the download before anything else can get in front of it.
+
+       Without these, the player waits through three round trips in a row
+       before the first byte of the game itself is requested: the SDK script
+       blocks parsing, the loader script is only appended once the inline
+       script below has run, and the 26 MB wasm is not fetched until the
+       framework has loaded and executed. Each link below is a file the
+       loader is certain to ask for, so the browser has them in flight while
+       it is still reading this file.
+
+       The loader fetches the framework with a <script src>, so that one is
+       preloaded "as=script". The wasm and the data are NOT preloaded, and
+       that is deliberate - see below.
+
+       THE TWO BIG FILES ARE NOT PRELOADED, and this cost a 25 MB
+       regression to learn. They used to be, with "as=fetch" and no
+       crossorigin, on the reasoning that this is what Unity's own fetch()
+       with default credentials matches. In a local browser it does: the
+       loader's later fetch reports transferSize 0 and the Network panel
+       shows one download. Poki's inspector reported the same build at
+       52 MB against 27 MB without the links - the wasm and the data
+       downloaded TWICE. A preload only gets reused when the second request
+       matches it on every axis the HTTP cache keys on, and a CDN serving
+       Content-Encoding: br with a Vary header is not the same axis set as
+       a plain local file server. The local check cannot see that, which is
+       why it passed.
+
+       So: preload the small scripts, which match reliably, and let the
+       loader ask for the 26 MB wasm and the 28 MB data itself. If this is
+       ever tried again, the only verification that counts is the number in
+       Poki's own inspector, not a local Network panel.
+       ===================================================================== -->
+  <link rel="preload" href="Build/481ce74ff574651e42e99727bd474455.loader.js" as="script">
+  <link rel="preload" href="Build/3b488967c512f58f3ebdff72f999116b.framework.js" as="script">
+
+  <!-- The loading screen's own art. The backdrop is a CSS background, which
+       is otherwise not requested until the stylesheet below is parsed, and
+       it is the largest thing the player is waiting to see. -->
+  <link rel="preload" href="loading/backdrop.webp" as="image">
+  <link rel="preload" href="loading/title.webp" as="image">
+  <link rel="preload" href="loading/trough.webp" as="image">
+
+  <!-- Poki JS SDK. Loaded here, but NOT initialised here: the C# side calls
+       init() through PokiSDK.jslib, which is Poki's documented Unity pattern
+       and keeps one source of truth for SDK lifecycle.
+
+       async, because a blocking third-party script in the head delays the
+       first paint AND every request under it - the loading screen and the
+       whole build queue behind a CDN round trip to another origin. Nothing
+       on the page reads PokiSDK synchronously: the only caller is the
+       jslib, from C#, once the engine is up, which is tens of seconds
+       later, and it waits for the global rather than assuming it. -->
+  <script>
+  // Offline Poki SDK stub: ads/analytics/account stripped; interstitial resumes, rewarded grants.
+  window.PokiSDK = {
+    init: function () { return Promise.resolve(); },
+    gameLoadingProgress: function () {},
+    gameLoadingFinished: function () {},
+    gameplayStart: function () {},
+    gameplayStop: function () {},
+    commercialBreak: function (cb) { if (typeof cb === "function") cb(); return Promise.resolve(); },
+    rewardedBreak: function (cb) { if (typeof cb === "function") cb(); return Promise.resolve(true); },
+    measure: function () {},
+    getURLParam: function () { return ""; },
+    shareableURL: function () { return Promise.resolve(""); },
+    openExternalLink: function () {},
+    movePill: function () {},
+    captureError: function () {},
+    getDeviceInfo: function () { return { category: "desktop", type: "desktop", orientation: "landscape" }; },
+    getUser: function () { return Promise.resolve(null); },
+    getToken: function () { return Promise.resolve(""); },
+    login: function () { return Promise.resolve(null); }
+  };
+  </script>
+
+  <script>
+  // =====================================================================
+  //  Forced landscape, and the loader watchdog.
+  //
+  //  Deliberately self-contained and inside the "poki include" markers.
+  //  Poki's uploader rewrites the contents of index.html and only promises
+  //  to carry across what is wrapped in these markers, so anything the game
+  //  cannot afford to lose has to live in here and has to work against a
+  //  page it did not write: it finds the canvas itself rather than assuming
+  //  the surrounding markup is ours.
+  // =====================================================================
+  (function () {
+    "use strict";
+
+    // ---- forced landscape ------------------------------------------------
+    //
+    // The game is 16:9 and has no portrait layout - the driving HUD puts a
+    // wheel under one thumb and two pedals under the other, and the four
+    // corners are all spoken for. It used to handle a phone held upright by
+    // covering the screen with a "turn your phone" gate, which is the one
+    // thing Poki's checklist forbids outright, and which is what players
+    // reported as a black screen: the gate is near-black, it comes up the
+    // instant the engine boots, and on a viewport that stays portrait it
+    // never goes away again.
+    //
+    // So the page turns the picture instead of asking the player to turn the
+    // phone. On a portrait viewport the canvas is laid out landscape - as
+    // wide as the viewport is tall - and rotated a quarter turn over it.
+    // Unity is handed a landscape canvas and never learns otherwise: every
+    // camera, CanvasScaler and HUD decision in the engine is made against
+    // 16:9 exactly as it is on a desktop. Turning the phone is then just the
+    // player choosing to hold the picture the right way up; the game does
+    // not change, and does not ask.
+    var canvas = null;
+    var rotated = false;
+    var viewportWidth = 0;        // the real viewport, for the input remap
+    var logicalWidth = 0;         // the canvas's own frame, always landscape
+    var logicalHeight = 0;
+
+    function pixelRatio() {
+      // A cap is worth having - a 3x phone renders 2.25x the pixels for no
+      // visible gain - but it has to be a cap Unity knows about, which is
+      // what config.devicePixelRatio is for. Capping the buffer here while
+      // leaving Unity on the phone's real 3x is what broke mobile once
+      // already: Unity drew a 3x frame into a 2x buffer, so the player got
+      // the top-left two thirds of the game blown up by half and every tap
+      // landed a third of a screen from their thumb.
+      return Math.min(window.devicePixelRatio || 1, 2);
+    }
+
+    // The transform below maps a point (u, v) in the canvas's own landscape
+    // frame to the screen point (viewportWidth - v, u). Its inverse is what
+    // the input remap needs: u = clientY, v = viewportWidth - clientX.
+    function placeLandscape(el) {
+      el.style.position = "absolute";
+      el.style.left = "0";
+      el.style.top = "0";
+      el.style.width = logicalWidth + "px";
+      el.style.height = logicalHeight + "px";
+      el.style.transformOrigin = "0 0";
+      el.style.transform = rotated
+        ? "translate(" + viewportWidth + "px, 0) rotate(90deg)"
+        : "";
+    }
+
+    function layout() {
+      var vw = Math.max(1, window.innerWidth);
+      var vh = Math.max(1, window.innerHeight);
+
+      viewportWidth = vw;
+
+      // A 2% margin before a viewport counts as portrait. A browser canvas
+      // reports square for a frame or two while the address bar slides away,
+      // and a game that spins a quarter turn and back while that happens is
+      // worse than one that waits.
+      rotated = vh > vw * 1.02;
+      logicalWidth = rotated ? vh : vw;
+      logicalHeight = rotated ? vw : vh;
+
+      // The loading screen is turned with the game. It is the same picture
+      // the engine draws a moment later, so letting one of them be upright
+      // and the other sideways would put a quarter turn in the middle of the
+      // handover.
+      var loading = document.getElementById("loading");
+      if (loading) {
+        placeLandscape(loading);
+        // The loading screen lays itself out off a 1280x720 reference, the
+        // same one the engine's CanvasScaler uses. It cannot read that off
+        // vw/vh any more, because those are the turned viewport's.
+        //
+        // In px, and that is not cosmetic: --s is multiplied by the plate's
+        // canvas-unit sizes, and `calc(317.33 * 1.125)` is a NUMBER, not a
+        // length. Every width, height and top that used it was then invalid
+        // at computed-value time and fell back to auto - which is what put
+        // the title half off the top of the screen and left the bar at zero
+        // by zero. A length here makes the same arithmetic produce a length.
+        loading.style.setProperty(
+          "--s", Math.min(logicalWidth / 1280, logicalHeight / 720) + "px");
+      }
+
+      if (!canvas) return;
+
+      placeLandscape(canvas);
+
+      var dpr = pixelRatio();
+      if (window.unityConfig) window.unityConfig.devicePixelRatio = dpr;
+      if (window.unityInstance && window.unityInstance.Module) {
+        // Unity reads this off the module every time it asks, so telling it
+        // once at startup is not enough: browser zoom and a window dragged
+        // to another monitor both change it under the game.
+        window.unityInstance.Module.devicePixelRatio = dpr;
+      }
+
+      // Sized from the logical frame, not from getBoundingClientRect: once
+      // the canvas is rotated that rect is the turned bounding box.
+      canvas.width = Math.max(1, Math.floor(logicalWidth * dpr));
+      canvas.height = Math.max(1, Math.floor(logicalHeight * dpr));
+    }
+
+    // ---- making Unity agree about where a finger is ----------------------
+    //
+    // Unity turns a pointer event into a screen position with
+    //   (event.clientX - rect.left) * canvas.width / rect.width
+    // and the same for y, where rect is canvas.getBoundingClientRect().
+    //
+    // For a rotated element that rect is the on-screen bounding box, so both
+    // the origin and the axes are wrong, and no value of rect can fix an
+    // axis swap. Two patches are needed and neither works without the other:
+    // the rect is pinned to the canvas's own untransformed frame, and the
+    // events are remapped into that frame on the way to Unity's handlers.
+    function patchRect(el) {
+      var native = el.getBoundingClientRect.bind(el);
+      el.getBoundingClientRect = function () {
+        if (!rotated) return native();
+        return {
+          left: 0, top: 0, right: logicalWidth, bottom: logicalHeight,
+          x: 0, y: 0, width: logicalWidth, height: logicalHeight,
+          toJSON: function () { return this; }
+        };
+      };
+    }
+
+    function remapTouches(list) {
+      if (!list) return list;
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        var t = list[i];
+        out.push({
+          identifier: t.identifier,
+          target: t.target,
+          clientX: t.clientY,
+          clientY: viewportWidth - t.clientX,
+          pageX: t.clientY,
+          pageY: viewportWidth - t.clientX,
+          screenX: t.clientY,
+          screenY: viewportWidth - t.clientX,
+          force: t.force,
+          radiusX: t.radiusY,
+          radiusY: t.radiusX
+        });
+      }
+      out.item = function (i) { return this[i]; };
+      return out;
+    }
+
+    function remap(e) {
+      if (!rotated) return e;
+      return new Proxy(e, {
+        get: function (target, key) {
+          switch (key) {
+            case "clientX": case "pageX": case "screenX": case "offsetX": case "x":
+              return target.clientY;
+            case "clientY": case "pageY": case "screenY": case "offsetY": case "y":
+              return viewportWidth - target.clientX;
+            // Pointer lock deltas turn with everything else. Only desktop
+            // ever locks the pointer, and desktop is never rotated, but a
+            // half-remapped event is worse than a consistent one.
+            case "movementX": return target.movementY;
+            case "movementY": return -target.movementX;
+            case "touches":        return remapTouches(target.touches);
+            case "targetTouches":  return remapTouches(target.targetTouches);
+            case "changedTouches": return remapTouches(target.changedTouches);
+            default:
+              var value = target[key];
+              // preventDefault and friends throw "Illegal invocation" if they
+              // are handed the proxy as their receiver.
+              return typeof value === "function" ? value.bind(target) : value;
+          }
+        }
+      });
+    }
+
+    var POINTER_EVENTS = /^(pointer|mouse|touch|click|wheel|contextmenu|drag|gotpointer|lostpointer)/;
+
+    // The canvas, window and document are all wrapped, because Emscripten
+    // resolves an event target out of specialHTMLTargets = [0, document,
+    // window] and Unity registers its mouse and touch callbacks against
+    // whichever of those the backend picked - not necessarily the canvas.
+    // Wrapping only the canvas looks right and silently does nothing: the
+    // game renders turned and every tap lands where the finger was, in the
+    // untouched portrait frame.
+    //
+    // Emscripten reads getBoundingClientRect(target) for the origin, and for
+    // document and window it short-circuits that to {left: 0, top: 0} - which
+    // is exactly right once the coordinates themselves are in the canvas's
+    // landscape frame, so the remap alone is enough for those two.
+    function patchListeners(el) {
+      var add = el.addEventListener.bind(el);
+      var remove = el.removeEventListener.bind(el);
+      var wrappers = new WeakMap();
+
+      el.addEventListener = function (type, listener, options) {
+        if (typeof listener !== "function" || !POINTER_EVENTS.test(type))
+          return add(type, listener, options);
+
+        var byType = wrappers.get(listener);
+        if (!byType) { byType = {}; wrappers.set(listener, byType); }
+        if (!byType[type]) {
+          byType[type] = function (event) { return listener.call(this, remap(event)); };
+        }
+        return add(type, byType[type], options);
+      };
+
+      el.removeEventListener = function (type, listener, options) {
+        var byType = typeof listener === "function" ? wrappers.get(listener) : null;
+        if (byType && byType[type]) return remove(type, byType[type], options);
+        return remove(type, listener, options);
+      };
+    }
+
+    function adopt(el) {
+      if (canvas === el) return;
+      canvas = el;
+      canvas.style.display = "block";
+      canvas.style.touchAction = "none";
+      patchRect(canvas);
+      patchListeners(canvas);
+      layout();
+    }
+
+    // These two have no canvas to wait for, and have to be wrapped before
+    // Unity's loader runs rather than when the canvas turns up.
+    patchListeners(window);
+    patchListeners(document);
+
+    // The canvas has to be patched before Unity's loader attaches anything
+    // to it. In our own template it is in the markup and found immediately;
+    // in a page Poki generated it may arrive later, so watch for it.
+    function findCanvas() {
+      var el = document.getElementById("unity-canvas") ||
+               document.querySelector("canvas#unity-canvas, canvas");
+      if (el) adopt(el);
+      return !!el;
+    }
+
+    if (!findCanvas()) {
+      var observer = new MutationObserver(function () {
+        if (findCanvas()) observer.disconnect();
+      });
+      document.addEventListener("DOMContentLoaded", findCanvas);
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    document.addEventListener("DOMContentLoaded", layout);
+    window.addEventListener("resize", layout);
+    if (window.visualViewport) window.visualViewport.addEventListener("resize", layout);
+
+    // orientationchange fires before the new layout is in place, so the sizes
+    // read now would still be the old orientation's.
+    window.addEventListener("orientationchange", function () {
+      layout();
+      requestAnimationFrame(layout);
+      setTimeout(layout, 300);
+    });
+
+    // Unity's own startup sets the canvas style more than once; re-assert
+    // the landscape frame over the first couple of seconds rather than
+    // fighting it with a permanent observer.
+    [250, 1000, 2500, 5000].forEach(function (ms) { setTimeout(layout, ms); });
+
+    window.MiningSimLandscape = {
+      layout: layout,
+      isRotated: function () { return rotated; }
+    };
+  })();
+  </script>
+  <!-- poki include end -->
+
+  <style>
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      overflow: hidden;              /* Poki: the game must not scroll the parent page */
+      background: #0a0a0c;
+      touch-action: none;            /* no pinch-zoom / double-tap zoom over the canvas */
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+    /* Both the canvas and the loading screen are positioned and sized by the
+       forced-landscape script in the head, which is the only thing that
+       knows whether the picture is being turned. Everything here is what is
+       true at any orientation. */
+    #unity-canvas {
+      display: block; background: #0a0a0c;
+      position: absolute; left: 0; top: 0;
+      /* Overwritten in px by the script above. Here as the fallback: a
+         canvas with no size at all is a blank page, which is the exact
+         failure this whole block exists to stop. */
+      width: 100%; height: 100%;
+    }
+    /* The loading screen is the game's own, drawn in the designer's art
+       rather than in a browser progress bar.
+
+       It has to be HTML and not Unity: Unity is the thing being loaded. So
+       this is the same screen MiningSim.UI.LoadingScreen builds - the same
+       backdrop, the same plate, the same bar in the same places - laid out
+       the same way, so the handover to the engine is not a cut to a
+       different picture. The numbers below are LoadingScreen's own, in
+       canvas units off the 1280x720 reference, and --s is the Expand
+       scaler's factor: min(w/1280, h/720), which is what the engine's
+       CanvasScaler is doing a moment later. The script in the head sets it,
+       because on a turned phone it is not min(100vw/1280, 100vh/720). */
+    #loading {
+      position: absolute; left: 0; top: 0;
+      width: 100%; height: 100%;      /* fallback, as above */
+      /* One canvas unit, as a length - see the setProperty in the head. The
+         fallback is only right while the picture is upright; the script
+         overwrites it as soon as it has run. */
+      --s: min(100vw / 1280, 100vh / 720);
+      background: #0a0a0c url("loading/backdrop.webp") center center / cover no-repeat;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: #d8d4cc;
+      transition: opacity .35s ease-out;
+    }
+    /* Faded rather than removed, so the engine's first frame arrives under
+       it instead of after a flash of nothing. */
+    #loading.done { opacity: 0; pointer-events: none; }
+
+    /* 476x118 in the mockup, at the mockup-to-canvas 2/3, centred 119 units
+       below the middle - LoadingScreen.TitleAt. The alt text is the fallback:
+       if the plate does not arrive, the word it draws still does. */
+    #loading-title {
+      position: absolute; left: 50%; top: calc(50% + 119 * var(--s));
+      width: calc(317.33 * var(--s)); height: calc(78.67 * var(--s));
+      transform: translate(-50%, -50%);
+      font-size: calc(44 * var(--s)); text-align: center; line-height: 1;
+    }
+    /* 1191x157 at 2/3, centred 208 units below the middle - BarAt. */
+    #loading-bar {
+      position: absolute; left: 50%; top: calc(50% + 208 * var(--s));
+      width: calc(794 * var(--s)); height: calc(104.67 * var(--s));
+      transform: translate(-50%, -50%);
+      background: url("loading/trough.webp") center center / 100% 100% no-repeat;
+    }
+    /* The trough inside the frame, as percentages of it: LoadingScreen's
+       insets of 53.33 / 31.33 / 39.33 canvas units over 794 x 104.67. */
+    #loading-track {
+      position: absolute; left: 6.717%; right: 6.717%; top: 29.93%; bottom: 37.57%;
+    }
+    /* Revealed left to right, not stretched: the engine draws this sprite
+       with Image.Type.Filled, and a bar that stretches its own texture as it
+       grows does not look like the same bar. */
+    #loading-fill {
+      position: absolute; inset: 0;
+      background: url("loading/fill.webp") left center / 100% 100% no-repeat;
+      clip-path: inset(0 calc(100% - var(--p, 0) * 100%) 0 0);
+      transition: clip-path .15s linear;
+    }
+    #error {
+      display: none; position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 80%; max-height: 80%; overflow: auto; padding: 20px 24px;
+      text-align: center; font-size: 15px; line-height: 1.5;
+      background: rgba(10, 10, 12, .9); border-radius: 8px;
+    }
+    #error b { display: block; margin-bottom: 8px; font-size: 17px; }
+    /* The diagnostic line is for whoever is watching the playtest recording,
+       not for the player, so it is present but quiet. */
+    #error small { display: block; margin-top: 12px; opacity: .55; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <canvas id="unity-canvas" tabindex="-1"></canvas>
+
+  <div id="loading">
+    <img id="loading-title" src="loading/title.webp" alt="Loading">
+    <div id="loading-bar">
+      <div id="loading-track"><div id="loading-fill"></div></div>
+    </div>
+    <div id="error"></div>
+  </div>
+
+  <!-- poki include body -->
+  <!-- poki include end -->
+
+  <script>
+    var canvas = document.querySelector("#unity-canvas");
+    var loading = document.querySelector("#loading");
+    var errorBox = document.querySelector("#error");
+    var started = Date.now();
+    var lastProgress = 0;
+    var finished = false;
+
+    var movedAt = Date.now();
+
+    function setProgress(value) {
+      var next = Math.max(0, Math.min(1, value));
+      if (next !== lastProgress) movedAt = Date.now();
+      lastProgress = next;
+      loading.style.setProperty("--p", lastProgress);
+      if (next >= 0.08) startMusicOnce();
+    }
+
+    // What a build that failed on a device we do not have needs to say. A
+    // black rectangle in a playtest recording is not a bug report; this is.
+    function diagnostics() {
+      var gl = "no";
+      try {
+        var probe = document.createElement("canvas");
+        if (probe.getContext("webgl2")) gl = "webgl2";
+        else if (probe.getContext("webgl")) gl = "webgl1 only";
+      } catch (e) { gl = "blocked"; }
+
+      return [
+        "v0.1.0",
+        Math.round((Date.now() - started) / 1000) + "s",
+        Math.round(lastProgress * 100) + "%",
+        gl,
+        (window.innerWidth + "x" + window.innerHeight + "@" +
+         (window.devicePixelRatio || 1) + "x"),
+        (navigator.deviceMemory ? navigator.deviceMemory + "GB" : "mem?"),
+        (navigator.hardwareConcurrency || "?") + "cpu"
+      ].join(" · ");
+    }
+
+    function showError(message) {
+      if (finished) return;
+      finished = true;
+      var title = document.querySelector("#loading-title");
+      var bar = document.querySelector("#loading-bar");
+      if (title) title.style.display = "none";
+      if (bar) bar.style.display = "none";
+      music.stop();
+      loading.classList.remove("done");
+      loading.style.display = "";
+      errorBox.style.display = "block";
+      errorBox.innerHTML = "<b>The game could not start</b>";
+      errorBox.appendChild(document.createTextNode(message));
+      var note = document.createElement("small");
+      note.textContent = diagnostics();
+      errorBox.appendChild(note);
+    }
+
+    // --- the loading music ------------------------------------------------
+    //
+    // The same track the start screen plays, so the game has a voice before
+    // the engine is up rather than loading in silence. It is a short cut of
+    // it at a low bitrate: this downloads alongside the build, and a minute
+    // of 256k stereo in front of the game would be paying for the music with
+    // the loading time it is there to cover.
+    //
+    // It is handed over rather than crossfaded - the engine starts the full
+    // track itself on the start screen - so this one fades out as the engine
+    // takes the screen.
+    var music = (function () {
+      // Created on first play, not here. `new Audio(src)` starts fetching at
+      // once, and 240 KB of music in the first second of the page is 240 KB
+      // of the build that is not arriving - during the exact seconds the
+      // player is deciding whether to wait. It is asked for once the build
+      // download is demonstrably moving (see setProgress), by which point
+      // the connection is warm and the music is no longer in anyone's way.
+      var el = null;
+      var stopped = false;
+
+      function element() {
+        if (el) return el;
+        el = new Audio();
+        el.loop = true;
+        el.volume = 0.30;        // AudioDirector's own level for this track
+        el.preload = "auto";
+        el.src = "loading/music.mp3";
+        return el;
+      }
+
+      function tryPlay() {
+        if (stopped) return;
+        try {
+          var played = element().play();
+          if (played && played.catch) played.catch(function () { /* see below */ });
+        } catch (e) { /* a device that will not play it loads quietly */ }
+      }
+
+      // Autoplay with sound is blocked until the page has been interacted
+      // with. On Poki the player has clicked to get here, so this usually
+      // just plays; where it does not, the first touch or key starts it,
+      // and if neither ever comes the game simply loads quietly.
+      ["pointerdown", "keydown", "touchstart"].forEach(function (evt) {
+        window.addEventListener(evt, function once() {
+          ["pointerdown", "keydown", "touchstart"].forEach(function (e2) {
+            window.removeEventListener(e2, once);
+          });
+          if (!stopped) tryPlay();
+        }, { passive: true });
+      });
+
+      // A tab in the background must not be heard.
+      document.addEventListener("visibilitychange", function () {
+        if (!el) return;
+        if (document.hidden) el.pause();
+        else if (!stopped) tryPlay();
+      });
+
+      return {
+        start: tryPlay,
+        stop: function () {
+          stopped = true;
+          if (el) { el.pause(); el.src = ""; }
+        },
+        fadeOut: function (seconds) {
+          stopped = true;
+          if (!el) return;
+          var from = el.volume, began = performance.now();
+          (function step(now) {
+            var t = (now - began) / (seconds * 1000);
+            if (t >= 1) { el.pause(); el.src = ""; return; }
+            el.volume = from * (1 - t);
+            requestAnimationFrame(step);
+          })(began);
+        }
+      };
+    })();
+
+    // Out of the way of the build, but not so far back that the game loads
+    // in silence: whichever of "the download is clearly running" and "two
+    // and a half seconds have passed" comes first.
+    var musicStarted = false;
+    function startMusicOnce() {
+      if (musicStarted) return;
+      musicStarted = true;
+      music.start();
+    }
+    setTimeout(startMusicOnce, 2500);
+
+    // Unity 6 builds for WebGL 2 only. Saying so is worth more than the
+    // black canvas a context failure otherwise leaves behind.
+    (function () {
+      var ok = false;
+      try { ok = !!document.createElement("canvas").getContext("webgl2"); } catch (e) { }
+      if (!ok) {
+        showError("This browser does not support WebGL 2, which the game needs. " +
+                  "Try an up-to-date Chrome, Edge, Firefox or Safari.");
+      }
+    })();
+
+    var config = {
+      dataUrl: "Build/b87e41a8129c68fbb06c313212ab9604.data",
+      frameworkUrl: "Build/3b488967c512f58f3ebdff72f999116b.framework.js",
+      codeUrl: "Build/4a995f5457ff592d7a16eb16ed27c95b.wasm",
+      streamingAssetsUrl: "StreamingAssets",
+      companyName: "DefaultCompany",
+      productName: "MiningSim",
+      productVersion: "0.1.0",
+      devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      showBanner: function (msg, type) { if (type === "error") showError(msg); }
+    };
+
+    // The landscape script owns the pixel ratio from here; it is in the head,
+    // outside this block, and this is how it reaches the config.
+    window.unityConfig = config;
+    if (window.MiningSimLandscape) window.MiningSimLandscape.layout();
+
+    // A build this size is killed outright by some phones - the tab's
+    // renderer goes down during the wasm compile and takes the canvas with
+    // it, which is the other way a player ends up looking at nothing. There
+    // is no event for that, so the only signal is a loader that stops making
+    // progress. Say so rather than sitting on a dead bar forever.
+    var watchdog = setInterval(function () {
+      if (finished) { clearInterval(watchdog); return; }
+
+      // A stall, not a deadline. This build is tens of megabytes and a phone
+      // on a slow connection legitimately takes longer than any fixed
+      // timeout worth setting - but a loader that has not moved the bar in
+      // forty seconds is not loading, it is dead.
+      var stalled = (Date.now() - movedAt) / 1000;
+      if (stalled < 40 || (Date.now() - started) / 1000 < 30) return;
+
+      clearInterval(watchdog);
+      showError(lastProgress > 0
+        ? "Loading stopped partway through. The game may be too large for " +
+          "this device's memory - try closing other tabs and reloading."
+        : "The game files did not start downloading. Check the connection " +
+          "and reload.");
+    }, 2000);
+
+    window.addEventListener("error", function (e) {
+      if (!finished && e && e.message && /memory|allocat|RangeError/i.test(e.message))
+        showError("The device ran out of memory loading the game.");
+    });
+
+    var script = document.createElement("script");
+    script.src = "Build/481ce74ff574651e42e99727bd474455.loader.js";
+    script.onerror = function () { showError("Could not load the game files."); };
+    script.onload = function () {
+      if (window.MiningSimLandscape) window.MiningSimLandscape.layout();
+
+      createUnityInstance(canvas, config, setProgress).then(function (unityInstance) {
+        window.unityInstance = unityInstance;
+        finished = true;
+        clearInterval(watchdog);
+
+        // The WebGL 2 probe above can be wrong - a context the probe could
+        // not get that the engine then does. If the game is up, whatever it
+        // said is moot, and an error panel over a running game is its own
+        // bug report.
+        errorBox.style.display = "none";
+        if (window.MiningSimLandscape) window.MiningSimLandscape.layout();
+
+        // The bar finishes before the screen goes, so the last thing the
+        // player sees of it is a full bar rather than one stopped at 90%.
+        setProgress(1);
+
+        // Two frames, so the engine's first frame is already under the
+        // loading screen when it starts to fade. On a slow phone the gap
+        // between the promise resolving and anything being drawn is the
+        // last place a black flash can get in.
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            loading.classList.add("done");
+            music.fadeOut(0.6);
+            setTimeout(function () { loading.style.display = "none"; }, 500);
+          });
+        });
+      }).catch(function (err) {
+        // Must fail visibly rather than sitting on a dead loading bar.
+        showError(String(err));
+      });
+    };
+    document.body.appendChild(script);
+  </script>
+</body>
+</html>
