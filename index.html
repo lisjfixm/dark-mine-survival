@@ -4,20 +4,18 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
   <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=yes">
-  <title>MiningSim</title>
-
-  <!-- poki include head -->
+  <title>Dark Mine Survival</title>
 
   <!-- =====================================================================
        Start the download before anything else can get in front of it.
 
        Without these, the player waits through three round trips in a row
-       before the first byte of the game itself is requested: the SDK script
-       blocks parsing, the loader script is only appended once the inline
-       script below has run, and the 26 MB wasm is not fetched until the
-       framework has loaded and executed. Each link below is a file the
-       loader is certain to ask for, so the browser has them in flight while
-       it is still reading this file.
+       before the first byte of the game itself is requested: the loader
+       script is only appended once the inline script below has run, and
+       the 26 MB wasm is not fetched until the framework has loaded and
+       executed. Each link below is a file the loader is certain to ask
+       for, so the browser has them in flight while it is still reading
+       this file.
 
        The loader fetches the framework with a <script src>, so that one is
        preloaded "as=script". The wasm and the data are NOT preloaded, and
@@ -25,21 +23,15 @@
 
        THE TWO BIG FILES ARE NOT PRELOADED, and this cost a 25 MB
        regression to learn. They used to be, with "as=fetch" and no
-       crossorigin, on the reasoning that this is what Unity's own fetch()
-       with default credentials matches. In a local browser it does: the
-       loader's later fetch reports transferSize 0 and the Network panel
-       shows one download. Poki's inspector reported the same build at
-       52 MB against 27 MB without the links - the wasm and the data
-       downloaded TWICE. A preload only gets reused when the second request
-       matches it on every axis the HTTP cache keys on, and a CDN serving
-       Content-Encoding: br with a Vary header is not the same axis set as
-       a plain local file server. The local check cannot see that, which is
-       why it passed.
+       crossorigin, on the reasoning that Unity's own fetch() with default
+       credentials matches. A preload only gets reused when the second
+       request matches it on every axis the HTTP cache keys on, and a CDN
+       serving Content-Encoding: br with a Vary header is not the same axis
+       set as a plain local file server, which is why the duplicate
+       download was invisible to a local check.
 
        So: preload the small scripts, which match reliably, and let the
-       loader ask for the 26 MB wasm and the 28 MB data itself. If this is
-       ever tried again, the only verification that counts is the number in
-       Poki's own inspector, not a local Network panel.
+       loader ask for the 26 MB wasm and the 28 MB data itself.
        ===================================================================== -->
   <link rel="preload" href="Build/481ce74ff574651e42e99727bd474455.loader.js" as="script">
   <link rel="preload" href="Build/3b488967c512f58f3ebdff72f999116b.framework.js" as="script">
@@ -51,19 +43,14 @@
   <link rel="preload" href="loading/title.webp" as="image">
   <link rel="preload" href="loading/trough.webp" as="image">
 
-  <!-- Poki JS SDK. Loaded here, but NOT initialised here: the C# side calls
-       init() through PokiSDK.jslib, which is Poki's documented Unity pattern
-       and keeps one source of truth for SDK lifecycle.
-
-       async, because a blocking third-party script in the head delays the
-       first paint AND every request under it - the loading screen and the
-       whole build queue behind a CDN round trip to another origin. Nothing
-       on the page reads PokiSDK synchronously: the only caller is the
-       jslib, from C#, once the engine is up, which is tens of seconds
-       later, and it waits for the global rather than assuming it. -->
+  <!-- Local platform bridge. The C# side calls init() through the jslib
+       bridge, which waits for this global rather than assuming it exists.
+       It resolves on the page rather than a remote SDK: ads, analytics and
+       account features are stripped; interstitial resumes and rewarded
+       grants immediately. -->
   <script>
-  // Offline Poki SDK stub: ads/analytics/account stripped; interstitial resumes, rewarded grants.
-  window.PokiSDK = {
+  // Offline platform bridge stub: ads/analytics/account stripped; interstitial resumes, rewarded grants.
+  window.OfflinePlatform = {
     init: function () { return Promise.resolve(); },
     gameLoadingProgress: function () {},
     gameLoadingFinished: function () {},
@@ -88,12 +75,9 @@
   // =====================================================================
   //  Forced landscape, and the loader watchdog.
   //
-  //  Deliberately self-contained and inside the "poki include" markers.
-  //  Poki's uploader rewrites the contents of index.html and only promises
-  //  to carry across what is wrapped in these markers, so anything the game
-  //  cannot afford to lose has to live in here and has to work against a
-  //  page it did not write: it finds the canvas itself rather than assuming
-  //  the surrounding markup is ours.
+  //  Deliberately self-contained: it finds the canvas itself rather than
+  //  assuming the surrounding markup is ours, so it works even if the
+  //  page wrapper changes underneath it.
   // =====================================================================
   (function () {
     "use strict";
@@ -103,8 +87,7 @@
     // The game is 16:9 and has no portrait layout - the driving HUD puts a
     // wheel under one thumb and two pedals under the other, and the four
     // corners are all spoken for. It used to handle a phone held upright by
-    // covering the screen with a "turn your phone" gate, which is the one
-    // thing Poki's checklist forbids outright, and which is what players
+    // covering the screen with a "turn your phone" gate, which players
     // reported as a black screen: the gate is near-black, it comes up the
     // instant the engine boots, and on a viewport that stays portrait it
     // never goes away again.
@@ -331,7 +314,7 @@
 
     // The canvas has to be patched before Unity's loader attaches anything
     // to it. In our own template it is in the markup and found immediately;
-    // in a page Poki generated it may arrive later, so watch for it.
+    // if the canvas arrives later, watch for it.
     function findCanvas() {
       var el = document.getElementById("unity-canvas") ||
                document.querySelector("canvas#unity-canvas, canvas");
@@ -364,18 +347,17 @@
     // fighting it with a permanent observer.
     [250, 1000, 2500, 5000].forEach(function (ms) { setTimeout(layout, ms); });
 
-    window.MiningSimLandscape = {
+    window.DarkMineLandscape = {
       layout: layout,
       isRotated: function () { return rotated; }
     };
   })();
   </script>
-  <!-- poki include end -->
 
   <style>
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
-      overflow: hidden;              /* Poki: the game must not scroll the parent page */
+      overflow: hidden;              /* the game must not scroll the parent page */
       background: #0a0a0c;
       touch-action: none;            /* no pinch-zoom / double-tap zoom over the canvas */
       -webkit-tap-highlight-color: transparent;
@@ -397,8 +379,8 @@
        rather than in a browser progress bar.
 
        It has to be HTML and not Unity: Unity is the thing being loaded. So
-       this is the same screen MiningSim.UI.LoadingScreen builds - the same
-       backdrop, the same plate, the same bar in the same places - laid out
+       this mirrors the engine's loading screen - the same backdrop, the
+       same plate, the same bar in the same places - laid out
        the same way, so the handover to the engine is not a cut to a
        different picture. The numbers below are LoadingScreen's own, in
        canvas units off the 1280x720 reference, and --s is the Expand
@@ -475,8 +457,6 @@
     <div id="error"></div>
   </div>
 
-  <!-- poki include body -->
-  <!-- poki include end -->
 
   <script>
     var canvas = document.querySelector("#unity-canvas");
@@ -507,7 +487,7 @@
       } catch (e) { gl = "blocked"; }
 
       return [
-        "v0.1.0",
+        "v0.1.1",
         Math.round((Date.now() - started) / 1000) + "s",
         Math.round(lastProgress * 100) + "%",
         gl,
@@ -576,9 +556,8 @@
       }
 
       // Autoplay with sound is blocked until the page has been interacted
-      // with. On Poki the player has clicked to get here, so this usually
-      // just plays; where it does not, the first touch or key starts it,
-      // and if neither ever comes the game simply loads quietly.
+      // with. The first touch or key starts it; if neither ever comes the
+      // game simply loads quietly.
       ["pointerdown", "keydown", "touchstart"].forEach(function (evt) {
         window.addEventListener(evt, function once() {
           ["pointerdown", "keydown", "touchstart"].forEach(function (e2) {
@@ -643,8 +622,8 @@
       codeUrl: "Build/4a995f5457ff592d7a16eb16ed27c95b.wasm",
       streamingAssetsUrl: "StreamingAssets",
       companyName: "DefaultCompany",
-      productName: "MiningSim",
-      productVersion: "0.1.0",
+      productName: "Dark Mine Survival",
+      productVersion: "0.1.1",
       devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
       showBanner: function (msg, type) { if (type === "error") showError(msg); }
     };
@@ -652,7 +631,7 @@
     // The landscape script owns the pixel ratio from here; it is in the head,
     // outside this block, and this is how it reaches the config.
     window.unityConfig = config;
-    if (window.MiningSimLandscape) window.MiningSimLandscape.layout();
+    if (window.DarkMineLandscape) window.DarkMineLandscape.layout();
 
     // A build this size is killed outright by some phones - the tab's
     // renderer goes down during the wasm compile and takes the canvas with
@@ -686,7 +665,7 @@
     script.src = "Build/481ce74ff574651e42e99727bd474455.loader.js";
     script.onerror = function () { showError("Could not load the game files."); };
     script.onload = function () {
-      if (window.MiningSimLandscape) window.MiningSimLandscape.layout();
+      if (window.DarkMineLandscape) window.DarkMineLandscape.layout();
 
       createUnityInstance(canvas, config, setProgress).then(function (unityInstance) {
         window.unityInstance = unityInstance;
@@ -698,7 +677,7 @@
         // said is moot, and an error panel over a running game is its own
         // bug report.
         errorBox.style.display = "none";
-        if (window.MiningSimLandscape) window.MiningSimLandscape.layout();
+        if (window.DarkMineLandscape) window.DarkMineLandscape.layout();
 
         // The bar finishes before the screen goes, so the last thing the
         // player sees of it is a full bar rather than one stopped at 90%.
