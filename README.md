@@ -2,6 +2,8 @@
 
 Unity 6 WebGL 2 離線成品，自 Poki 平台版本離線硬化，無外部 CDN／SDK 依賴。
 
+- 線上版（GitHub Pages）：https://lisjfixm.github.io/dark-mine-survival/
+
 ## 來源
 
 - Poki 頁面：https://poki.com/zh/g/dark-mine-survival
@@ -10,6 +12,7 @@ Unity 6 WebGL 2 離線成品，自 Poki 平台版本離線硬化，無外部 CDN
 
 ## 執行方式
 
+- 線上版由 GitHub Pages 部署，來源為 `main` 分支根目錄；推送 main 後自動更新。
 - 附 `啟動 Dark Mine Survival.bat`：在本機 `127.0.0.1:8780` 起 Python 靜態伺服器後自動開瀏覽器。
 - 也可用任意靜態伺服器指向本目錄。`file://` 協議會被 WebGL 擋模組載入與 XHR，不可直接雙擊開啟。
 - 瀏覽器需支援 WebGL 2（新版 Chrome / Edge / Firefox / Safari）。
@@ -36,5 +39,5 @@ Unity 6 WebGL 2 離線成品，自 Poki 平台版本離線硬化，無外部 CDN
 
 | 版本 | 日期 | 說明 |
 | --- | --- | --- |
-| 0.1.1 | 2026-11-15 | 清理 HTML 層 Poki 命名與平台註解；頁面標題改為 Dark Mine Survival；補本 README。玩法與成品內容未變更。 |
+| 0.1.1 | 2026-11-15 | 清理 HTML 層 Poki 命名與平台註解；頁面標題改為 Dark Mine Survival；啟用 GitHub Pages 線上版（main 根目錄）；補本 README。玩法與成品內容未變更。 |
 | 0.1.0 | — | 初版離線成品（Poki 抓取並離線硬化）。 |
