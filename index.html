@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en-us">
+<html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
   <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=yes">
-  <title>Dark Mine Survival</title>
+  <title>Dark Mine Survival - 地底礦生存</title>
 
   <!-- =====================================================================
        Start the download before anything else can get in front of it.
@@ -40,7 +40,6 @@
        is otherwise not requested until the stylesheet below is parsed, and
        it is the largest thing the player is waiting to see. -->
   <link rel="preload" href="loading/backdrop.webp" as="image">
-  <link rel="preload" href="loading/title.webp" as="image">
   <link rel="preload" href="loading/trough.webp" as="image">
 
   <!-- Local platform bridge. The C# side calls init() through the jslib
@@ -410,6 +409,7 @@
       position: absolute; left: 50%; top: calc(50% + 119 * var(--s));
       width: calc(317.33 * var(--s)); height: calc(78.67 * var(--s));
       transform: translate(-50%, -50%);
+      display: flex; align-items: center; justify-content: center;
       font-size: calc(44 * var(--s)); text-align: center; line-height: 1;
     }
     /* 1191x157 at 2/3, centred 208 units below the middle - BarAt. */
@@ -444,18 +444,29 @@
     /* The diagnostic line is for whoever is watching the playtest recording,
        not for the player, so it is present but quiet. */
     #error small { display: block; margin-top: 12px; opacity: .55; font-size: 11px; }
+    /* 實驗性自動遊玩開關；位於畫面右上角，不擋其餘遊戲操作。 */
+    #auto-toggle {
+      position: absolute; top: 10px; right: 10px; z-index: 20;
+      padding: 8px 12px; border: 1px solid rgba(216,212,204,.35); border-radius: 6px;
+      background: rgba(10,10,12,.65); color: #d8d4cc;
+      font: 13px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      cursor: pointer; touch-action: none;
+    }
+    #auto-toggle.on { background: rgba(58,92,58,.75); }
   </style>
 </head>
 <body>
   <canvas id="unity-canvas" tabindex="-1"></canvas>
 
   <div id="loading">
-    <img id="loading-title" src="loading/title.webp" alt="Loading">
+    <div id="loading-title">載入中…</div>
     <div id="loading-bar">
       <div id="loading-track"><div id="loading-fill"></div></div>
     </div>
     <div id="error"></div>
   </div>
+
+  <button id="auto-toggle" type="button" title="實驗性自動腳本：僅模擬操作，不讀取遊戲狀態，可能卡住。">自動遊玩：關</button>
 
 
   <script>
@@ -487,7 +498,7 @@
       } catch (e) { gl = "blocked"; }
 
       return [
-        "v0.1.1",
+        "v0.1.2",
         Math.round((Date.now() - started) / 1000) + "s",
         Math.round(lastProgress * 100) + "%",
         gl,
@@ -509,7 +520,7 @@
       loading.classList.remove("done");
       loading.style.display = "";
       errorBox.style.display = "block";
-      errorBox.innerHTML = "<b>The game could not start</b>";
+      errorBox.innerHTML = "<b>遊戲無法啟動</b>";
       errorBox.appendChild(document.createTextNode(message));
       var note = document.createElement("small");
       note.textContent = diagnostics();
@@ -611,8 +622,7 @@
       var ok = false;
       try { ok = !!document.createElement("canvas").getContext("webgl2"); } catch (e) { }
       if (!ok) {
-        showError("This browser does not support WebGL 2, which the game needs. " +
-                  "Try an up-to-date Chrome, Edge, Firefox or Safari.");
+        showError("此瀏覽器不支援遊戲所需的 WebGL 2，請改用最新版 Chrome、Edge、Firefox 或 Safari。");
       }
     })();
 
@@ -623,7 +633,7 @@
       streamingAssetsUrl: "StreamingAssets",
       companyName: "DefaultCompany",
       productName: "Dark Mine Survival",
-      productVersion: "0.1.1",
+      productVersion: "0.1.2",
       devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
       showBanner: function (msg, type) { if (type === "error") showError(msg); }
     };
@@ -650,20 +660,18 @@
 
       clearInterval(watchdog);
       showError(lastProgress > 0
-        ? "Loading stopped partway through. The game may be too large for " +
-          "this device's memory - try closing other tabs and reloading."
-        : "The game files did not start downloading. Check the connection " +
-          "and reload.");
+        ? "載入中途停止。裝置記憶體可能不足，請關閉其他分頁後重新整理。"
+        : "遊戲檔案未開始下載，請檢查網路連線後重新整理。");
     }, 2000);
 
     window.addEventListener("error", function (e) {
       if (!finished && e && e.message && /memory|allocat|RangeError/i.test(e.message))
-        showError("The device ran out of memory loading the game.");
+        showError("載入遊戲時記憶體不足。");
     });
 
     var script = document.createElement("script");
     script.src = "Build/481ce74ff574651e42e99727bd474455.loader.js";
-    script.onerror = function () { showError("Could not load the game files."); };
+    script.onerror = function () { showError("無法載入遊戲檔案。"); };
     script.onload = function () {
       if (window.DarkMineLandscape) window.DarkMineLandscape.layout();
 
@@ -701,5 +709,8 @@
     };
     document.body.appendChild(script);
   </script>
+
+  <!-- 實驗性粗糙自動遊玩腳本；預設關閉，開關狀態本機保存。 -->
+  <script src="auto.js"></script>
 </body>
 </html>
