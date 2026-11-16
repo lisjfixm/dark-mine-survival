@@ -444,15 +444,52 @@
     /* The diagnostic line is for whoever is watching the playtest recording,
        not for the player, so it is present but quiet. */
     #error small { display: block; margin-top: 12px; opacity: .55; font-size: 11px; }
-    /* 實驗性自動遊玩開關；位於畫面右上角，不擋其餘遊戲操作。 */
-    #auto-toggle {
+    /* 右上角功能列：自動遊玩、中文覆蓋、詞彙對照；不擋其餘遊戲操作。 */
+    #topbar {
       position: absolute; top: 10px; right: 10px; z-index: 20;
+      display: flex; gap: 8px;
+    }
+    #topbar button {
       padding: 8px 12px; border: 1px solid rgba(216,212,204,.35); border-radius: 6px;
       background: rgba(10,10,12,.65); color: #d8d4cc;
       font: 13px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       cursor: pointer; touch-action: none;
     }
-    #auto-toggle.on { background: rgba(58,92,58,.75); }
+    #topbar button.on { background: rgba(58,92,58,.75); }
+
+    /* 中文 overlay 層：系統字型渲染，不依賴遊戲內 TMP 字型。標籤不攔截
+       觸控／滑鼠；只有詞彙對照面板本身可互動。座標為 1280x720 估計值。 */
+    #zh-layer {
+      position: absolute; left: 0; top: 0; z-index: 15;
+      pointer-events: none;
+      --s: min(100vw / 1280, 100vh / 720);
+    }
+    .zh-zone {
+      position: absolute; white-space: nowrap; pointer-events: none;
+      font: bold calc(13 * var(--s))/1.2 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #f2ead8; text-shadow: 0 1px 3px rgba(0,0,0,.85);
+      opacity: 0; transition: opacity .2s ease;
+    }
+    #zh-layer.on .zh-zone { opacity: .92; }
+    #zh-legend {
+      position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(720px, 82%); max-height: 70%; overflow: auto;
+      pointer-events: auto; display: none;
+      background: rgba(12,12,14,.93); border: 1px solid rgba(216,212,204,.25);
+      border-radius: 10px; padding: 14px 16px; color: #d8d4cc;
+      font: calc(13 * var(--s))/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    #zh-legend.open { display: block; }
+    .zh-legend-head { display: flex; justify-content: space-between; align-items: center; font-weight: bold; margin-bottom: 8px; }
+    .zh-legend-close {
+      padding: 4px 10px; border: 1px solid rgba(216,212,204,.35); border-radius: 6px;
+      background: rgba(10,10,12,.65); color: #d8d4cc; cursor: pointer; font-size: 12px;
+    }
+    .zh-legend-group { margin: 10px 0 4px; font-weight: bold; color: #f2ead8; }
+    .zh-legend-row { display: flex; gap: 12px; padding: 3px 0; }
+    .zh-en { flex: 1; color: #9a958c; }
+    .zh-zh { flex: 1; }
   </style>
 </head>
 <body>
@@ -466,7 +503,11 @@
     <div id="error"></div>
   </div>
 
-  <button id="auto-toggle" type="button" title="實驗性自動腳本：僅模擬操作，不讀取遊戲狀態，可能卡住。">自動遊玩：關</button>
+  <div id="topbar">
+    <button id="auto-toggle" type="button" title="實驗性自動腳本：僅模擬操作，不讀取遊戲狀態，可能卡住。">自動遊玩：關</button>
+    <button id="zh-toggle" type="button" title="中文覆蓋層：在 HUD 區域貼繁中標籤；座標為估計值，需實機校準。">中文覆蓋：關</button>
+    <button id="zh-legend" type="button" title="查看英文文本與繁中翻譯對照。">詞彙對照</button>
+  </div>
 
 
   <script>
@@ -498,7 +539,7 @@
       } catch (e) { gl = "blocked"; }
 
       return [
-        "v0.1.2",
+        "v0.1.3",
         Math.round((Date.now() - started) / 1000) + "s",
         Math.round(lastProgress * 100) + "%",
         gl,
@@ -633,7 +674,7 @@
       streamingAssetsUrl: "StreamingAssets",
       companyName: "DefaultCompany",
       productName: "Dark Mine Survival",
-      productVersion: "0.1.2",
+      productVersion: "0.1.3",
       devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
       showBanner: function (msg, type) { if (type === "error") showError(msg); }
     };
@@ -712,5 +753,8 @@
 
   <!-- 實驗性粗糙自動遊玩腳本；預設關閉，開關狀態本機保存。 -->
   <script src="auto.js"></script>
+
+  <!-- 中文 overlay 覆蓋層：HUD 繁中標籤＋詞彙對照；預設關閉，不改二進位。 -->
+  <script src="zh-overlay.js"></script>
 </body>
 </html>
